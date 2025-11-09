@@ -205,7 +205,7 @@ router.post("/auth/login", rlAuth, async (req, res) => {
     return res
       .status(400)
       .json({ message: "Validation failed", issues: parsed.error.issues });
-
+  console.log("HITTING", parsed);
   const { emailOrUsername, password } = parsed.data;
   const isEmail = emailOrUsername.includes("@");
   const ident = isEmail
