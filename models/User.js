@@ -10,6 +10,23 @@ const PreferencesSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const ProvidersSchema = new mongoose.Schema(
+  {
+    spotify: {
+      userId: { type: String, default: null, index: true },
+      refreshToken: { type: String, default: null },
+      scope: { type: [String], default: [] },
+      linkedAt: { type: Date, default: null },
+    },
+    apple: {
+      musicUserToken: { type: String, default: null },
+      subscriptionActive: { type: Boolean, default: null },
+      linkedAt: { type: Date, default: null },
+    },
+  },
+  { _id: false }
+);
+
 const UserSchema = new mongoose.Schema(
   {
     firstName: { type: String, default: "" },
@@ -42,6 +59,7 @@ const UserSchema = new mongoose.Schema(
     deactivatedAt: { type: Date, default: null },
     tokenVersion: { type: Number, default: 0 },
     preferences: { type: PreferencesSchema, default: () => ({}) },
+    providers: { type: ProvidersSchema, default: () => ({}) },
   },
   { timestamps: true }
 );
