@@ -32,3 +32,35 @@ export const isJtiDenied = async (jti) => {
   if (!jti) return false;
   return Boolean(await redis.get(denyKey(jti)));
 };
+
+// ----- OAuth state (CLEANED UP) -----
+const stateKey = (userId, state) => `oauth:spotify:${userId}:${state}`;
+const stateMirrorKey = (state) => `oauth:spotify:state:${state}`;
+
+/**
+ * Save short-lived Spotify OAuth state.
+ * Writes two keys:
+ *  - user-scoped: oauth:spotify:{userId}:{state} -> JSON payload
+ *  - mirror:     oauth:spotify:state:{state}     -> userId
+ */
+export const setSpotifyOAuthState = async (userId, state, data, ttlSec = 600) => {
+  const payload = JSON.stringify(data || {});
+  await redis.multi()
+    .set(stateKey(userId, state), payload, "EX", ttlSec)
+    .set(stateMirrorKey(state), String(userId), "EX", ttlSec)
+    .exec();
+};
+
+/** Resolve userId from state (uses mirror key) */
+export const findUserIdBySpotifyState = async (state) => {
+  const userId = await redis.get(stateMirrorKey(state));
+  return userId || null;
+};
+
+/** Read & delete user-scoped state payload (single use) */
+export const getAndDeleteSpotifyOAuthState = async (userId, state) => {
+  const key = stateKey(userId, state);
+  const val = await redis.get(key);
+  if (val) await redis.del(key);
+  return val ? JSON.parse(val) : null;
+};
