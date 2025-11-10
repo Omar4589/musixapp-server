@@ -16,9 +16,11 @@ import {
   getCurrentUserProfile,
   refreshAccessToken,
 } from "../services/spotify.js";
+import { signAppleDeveloperToken } from "../services/apple.js";
 
 const router = express.Router();
 
+/* ---------- SPOTIFY SPOTIFY SPOTIFY SPOTIFY SPOTIFY  ---------- */
 const SPOTIFY_SCOPES = [
   "user-read-email",
   "user-read-private",
@@ -132,6 +134,10 @@ router.get("/me/providers", requireAuth, async (req, res) => {
       subscriptionActive: a?.subscriptionActive ?? null,
       needsAttention: false, // we don’t hard-block on this
     },
+    flags: {
+      providerLinkOptional: !!env.PROVIDER_LINK_OPTIONAL,
+      appleAndroidEnabled: !!env.PROVIDER_APPLE_ANDROID_ENABLED,
+    },
   });
 });
 
@@ -198,3 +204,45 @@ export async function setSpotifyState(userId, state, data, ttlSec = 600) {
   await redis.set(stateMirrorKey(state), String(userId), "EX", ttlSec);
   await _origSetSpotifyState(userId, state, data, ttlSec);
 }
+
+/* ---------- APPLE APPLE APPLE APPLE APPLE APPLE APPLE ---------- */
+// GET /api/apple/dev-token
+router.get("/apple/dev-token", requireAuth, (_req, res) => {
+  try {
+    console.log("trying to get apple token");
+    const { token, expiresAt } = signAppleDeveloperToken(1800);
+    console.log(token);
+    res.json({ devToken: token, expiresAt });
+  } catch {
+    res.status(500).json({ message: "Failed to create Apple dev token" });
+  }
+});
+
+// POST /api/apple/token
+router.post("/apple/token", requireAuth, async (req, res) => {
+  console.log("Posting apple token");
+  const { musicUserToken } = req.body || {};
+  if (!musicUserToken)
+    return res.status(400).json({ message: "musicUserToken required" });
+
+  await User.findByIdAndUpdate(req.user._id, {
+    $set: {
+      "providers.apple.musicUserToken": musicUserToken,
+      "providers.apple.linkedAt": new Date(),
+    },
+  });
+  return res.json({ ok: true });
+});
+
+// POST /api/providers/apple/unlink
+router.post("/providers/apple/unlink", requireAuth, async (req, res) => {
+  console.log("Unlinking apple");
+  await User.findByIdAndUpdate(req.user._id, {
+    $set: {
+      "providers.apple.musicUserToken": null,
+      "providers.apple.subscriptionActive": null,
+      "providers.apple.linkedAt": null,
+    },
+  });
+  return res.json({ ok: true });
+});
