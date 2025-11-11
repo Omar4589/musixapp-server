@@ -2,10 +2,34 @@
 import { env } from "../../config/env.js";
 import { rcacheGet, rcacheSet } from "../../lib/redisCache.js";
 import { logger } from "../../config/logger.js";
+import { refreshAccessToken } from "../spotify.js";
 
 const API_BASE = "https://api.spotify.com/v1";
 
-// Basic client credentials flow to get system token
+/* -----------------------------
+ *  Helpers
+ * ----------------------------- */
+function mapSpotifyTrackToCard(track) {
+  if (!track?.id) return null;
+  try {
+    return {
+      id: `spotify:${track.id}`,
+      provider: "spotify",
+      providerId: track.id,
+      name: track.name || "",
+      artists: track.artists?.map((a) => a.name) || [],
+      album: track.album?.name || "",
+      durationMs: track.duration_ms || null,
+      artworkUrl: track.album?.images?.[0]?.url || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch generic browse feed using app-level token
+ */
 async function getSystemAccessToken() {
   const cacheKey = "spotify:system:token";
   const cached = await rcacheGet(cacheKey);
@@ -33,7 +57,88 @@ async function getSystemAccessToken() {
   return data.access_token;
 }
 
-export async function getSpotifyHomeRows({ user, locale }) {
+/* -----------------------------
+ *  Personalized Discovery
+ * ----------------------------- */
+export async function getSpotifyHomeRows({ user }) {
+  const rows = [];
+  const refreshToken = user?.providers?.spotify?.refreshToken;
+
+  // ✅ personalized path if user has a refresh token
+  if (refreshToken) {
+    try {
+      const { accessToken } = await refreshAccessToken(refreshToken);
+      const userId = user._id.toString();
+      const topKey = `spotify:${userId}:top`;
+      const recentKey = `spotify:${userId}:recent`;
+
+      let top = await rcacheGet(topKey);
+      let recent = await rcacheGet(recentKey);
+
+      // Your Top Tracks
+      if (!top) {
+        const res = await fetch(`${API_BASE}/me/top/tracks?limit=20`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          top = (data?.items || []).map(mapSpotifyTrackToCard).filter(Boolean);
+          await rcacheSet(topKey, top, 90);
+        }
+      }
+      if (top?.length) {
+        rows.push({ key: "spotify:top", title: "Your Top Tracks", items: top });
+      }
+
+      // Recently Played
+      if (!recent) {
+        const res = await fetch(
+          `${API_BASE}/me/player/recently-played?limit=20`,
+          {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          recent = (data?.items || [])
+            .map((x) => mapSpotifyTrackToCard(x.track))
+            .filter(Boolean);
+          await rcacheSet(recentKey, recent, 90);
+        }
+      }
+      if (recent?.length) {
+        rows.push({
+          key: "spotify:recent",
+          title: "Recently Played",
+          items: recent,
+        });
+      }
+
+      // If personalized failed silently or no rows, fallback to generic
+      if (!rows.length) {
+        const fallback = await getSpotifyGenericRows();
+        rows.push(...fallback);
+      }
+
+      return rows;
+    } catch (err) {
+      logger.error({
+        msg: "spotify.discovery.personal.failed",
+        err: err.message,
+      });
+      const fallback = await getSpotifyGenericRows();
+      return fallback;
+    }
+  }
+
+  // ❌ No refresh token → generic public browse
+  return await getSpotifyGenericRows();
+}
+
+/* -----------------------------
+ *  Generic (Public) Feed
+ * ----------------------------- */
+async function getSpotifyGenericRows() {
   const rows = [];
   const token = await getSystemAccessToken();
 
@@ -47,7 +152,7 @@ export async function getSpotifyHomeRows({ user, locale }) {
       }).then((r) => r.json()),
     ]);
 
-    // Featured playlists
+    // Featured Playlists
     const playlists =
       featured?.playlists?.items?.map((p) => ({
         id: `spotify:${p.id}`,
@@ -68,7 +173,7 @@ export async function getSpotifyHomeRows({ user, locale }) {
       });
     }
 
-    // New releases (albums → top tracks)
+    // New Releases
     const albums =
       newReleases?.albums?.items?.map((a) => ({
         id: `spotify:${a.id}`,
@@ -89,7 +194,7 @@ export async function getSpotifyHomeRows({ user, locale }) {
       });
     }
   } catch (err) {
-    logger.error({ msg: "spotify.discovery.failed", err: err.message });
+    logger.error({ msg: "spotify.discovery.generic.failed", err: err.message });
   }
 
   return rows;
