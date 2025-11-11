@@ -167,3 +167,65 @@ export async function getAppleHomeRows({ user, storefront }) {
 
   return rows;
 }
+
+/* -----------------------------
+ * Track + Album Details (Apple)
+ * ----------------------------- */
+export async function getAppleTrackDetails(id, userToken, storefront = "us") {
+  const r = await appleFetch(`/v1/catalog/${storefront}/songs/${id}`, {
+    userToken,
+    storefront,
+  });
+
+  const item = r?.data?.[0];
+  if (!item) throw new Error("Track not found");
+  const attrs = item.attributes || {};
+  const artwork = attrs.artwork?.url
+    ?.replace("{w}", "800")
+    .replace("{h}", "800");
+
+  return {
+    id: `apple:${item.id}`,
+    provider: "apple",
+    name: attrs.name || "",
+    artists: attrs.artistName ? [attrs.artistName] : [],
+    album: attrs.albumName || "",
+    releaseDate: attrs.releaseDate || null,
+    genre: attrs.genreNames?.[0] || null,
+    artworkUrl: artwork || null,
+  };
+}
+
+export async function getAppleAlbumDetails(id, userToken, storefront = "us") {
+  const r = await appleFetch(`/v1/catalog/${storefront}/albums/${id}`, {
+    userToken,
+    storefront,
+  });
+
+  const item = r?.data?.[0];
+  if (!item) throw new Error("Album not found");
+  const attrs = item.attributes || {};
+  const artwork = attrs.artwork?.url
+    ?.replace("{w}", "800")
+    .replace("{h}", "800");
+
+  const tracks =
+    item.relationships?.tracks?.data?.map((t) => ({
+      id: `apple:${t.id}`,
+      name: t.attributes?.name || "",
+      artists: t.attributes?.artistName ? [t.attributes.artistName] : [],
+      durationMs: t.attributes?.durationInMillis || null,
+    })) || [];
+
+  return {
+    id: `apple:${item.id}`,
+    provider: "apple",
+    name: attrs.name || "",
+    artists: attrs.artistName ? [attrs.artistName] : [],
+    album: attrs.name || "",
+    releaseDate: attrs.releaseDate || null,
+    genre: attrs.genreNames?.[0] || null,
+    artworkUrl: artwork || null,
+    tracks,
+  };
+}

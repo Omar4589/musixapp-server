@@ -3,6 +3,7 @@ import { env } from "../../config/env.js";
 import { rcacheGet, rcacheSet } from "../../lib/redisCache.js";
 import { logger } from "../../config/logger.js";
 import { refreshAccessToken } from "../spotify.js";
+import { refreshAccessToken } from "../spotify.js";
 
 const API_BASE = "https://api.spotify.com/v1";
 
@@ -30,31 +31,35 @@ function mapSpotifyTrackToCard(track) {
 /**
  * Fetch generic browse feed using app-level token
  */
-async function getSystemAccessToken() {
-  const cacheKey = "spotify:system:token";
-  const cached = await rcacheGet(cacheKey);
-  if (cached) return cached;
+async function getSpotifyAccessToken(refreshToken) {
+  if (!refreshToken) {
+    // fallback to system token
+    const cached = await rcacheGet("spotify:system:token");
+    if (cached) return cached;
 
-  const body = new URLSearchParams({
-    grant_type: "client_credentials",
-    client_id: env.SPOTIFY_CLIENT_ID,
-    client_secret: env.SPOTIFY_CLIENT_SECRET,
-  });
+    const body = new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: env.SPOTIFY_CLIENT_ID,
+      client_secret: env.SPOTIFY_CLIENT_SECRET,
+    });
 
-  const res = await fetch("https://accounts.spotify.com/api/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
-  });
-
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`Spotify system token failed: ${txt.slice(0, 120)}`);
+    const res = await fetch("https://accounts.spotify.com/api/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error("Spotify token failed");
+    await rcacheSet(
+      "spotify:system:token",
+      data.access_token,
+      data.expires_in - 30
+    );
+    return data.access_token;
   }
 
-  const data = await res.json();
-  await rcacheSet(cacheKey, data.access_token, data.expires_in - 30);
-  return data.access_token;
+  const { accessToken } = await refreshAccessToken(refreshToken);
+  return accessToken;
 }
 
 /* -----------------------------
@@ -198,4 +203,72 @@ async function getSpotifyGenericRows() {
   }
 
   return rows;
+}
+
+/* -----------------------------
+ * Track + Album Details (Spotify)
+ * ----------------------------- */
+export async function getSpotifyTrackDetails(id, refreshToken) {
+  const cacheKey = `spotify:track:${id}`;
+  const cached = await rcacheGet(cacheKey);
+  if (cached) return cached;
+
+  const accessToken = await getSpotifyAccessToken(refreshToken);
+  const res = await fetch(`${API_BASE}/tracks/${id}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (!res.ok) throw new Error(`Spotify track fetch failed: ${res.status}`);
+  const t = await res.json();
+
+  const track = {
+    id: `spotify:${t.id}`,
+    provider: "spotify",
+    name: t.name || "",
+    artists: (t.artists || []).map((a) => a.name),
+    album: t.album?.name || "",
+    releaseDate: t.album?.release_date || null,
+    genre: null,
+    artworkUrl: t.album?.images?.[0]?.url || null,
+  };
+
+  await rcacheSet(cacheKey, track, 600);
+  return track;
+}
+
+export async function getSpotifyAlbumDetails(id, refreshToken) {
+  const cacheKey = `spotify:album:${id}`;
+  const cached = await rcacheGet(cacheKey);
+  if (cached) return cached;
+
+  const accessToken = await getSpotifyAccessToken(refreshToken);
+  const res = await fetch(`${API_BASE}/albums/${id}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (!res.ok) throw new Error(`Spotify album fetch failed: ${res.status}`);
+  const a = await res.json();
+
+  const tracks =
+    (a.tracks?.items || []).map((t) => ({
+      id: `spotify:${t.id}`,
+      name: t.name || "",
+      artists: (t.artists || []).map((x) => x.name),
+      durationMs: t.duration_ms || null,
+    })) || [];
+
+  const album = {
+    id: `spotify:${a.id}`,
+    provider: "spotify",
+    name: a.name || "",
+    artists: (a.artists || []).map((x) => x.name),
+    album: a.name || "",
+    releaseDate: a.release_date || null,
+    genre: (a.genres && a.genres[0]) || null,
+    artworkUrl: a.images?.[0]?.url || null,
+    tracks,
+  };
+
+  await rcacheSet(cacheKey, album, 600);
+  return album;
 }
