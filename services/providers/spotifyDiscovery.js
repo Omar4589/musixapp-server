@@ -12,12 +12,14 @@ const API_BASE = "https://api.spotify.com/v1";
 function mapSpotifyTrackToCard(track) {
   if (!track?.id) return null;
   try {
+    const artists =
+      track.artists?.map((a) => ({ id: a.id || null, name: a.name })) || [];
     return {
       id: `spotify:${track.id}`,
       provider: "spotify",
       providerId: track.id,
       name: track.name || "",
-      artists: track.artists?.map((a) => a.name) || [],
+      artists,
       album: track.album?.name || "",
       durationMs: track.duration_ms || null,
       artworkUrl: track.album?.images?.[0]?.url || null,
@@ -252,7 +254,7 @@ export async function getSpotifyAlbumDetails(id, refreshToken) {
     (a.tracks?.items || []).map((t) => ({
       id: `spotify:${t.id}`,
       name: t.name || "",
-      artists: (t.artists || []).map((x) => x.name),
+      artists: (t.artists || []).map((x) => ({ id: x.id, name: x.name })),
       durationMs: t.duration_ms || null,
     })) || [];
 
@@ -260,7 +262,7 @@ export async function getSpotifyAlbumDetails(id, refreshToken) {
     id: `spotify:${a.id}`,
     provider: "spotify",
     name: a.name || "",
-    artists: (a.artists || []).map((x) => x.name),
+    artists: (a.artists || []).map((x) => ({ id: x.id, name: x.name })),
     album: a.name || "",
     releaseDate: a.release_date || null,
     genre: (a.genres && a.genres[0]) || null,
@@ -270,4 +272,47 @@ export async function getSpotifyAlbumDetails(id, refreshToken) {
 
   await rcacheSet(cacheKey, album, 600);
   return album;
+}
+
+export async function getSpotifyArtistDetails(id, refreshToken) {
+  const cacheKey = `spotify:artist:${id}`;
+  const cached = await rcacheGet(cacheKey);
+  if (cached) return cached;
+
+  if (!refreshToken) throw new Error("Missing Spotify refresh token");
+
+  try {
+    const { accessToken } = await refreshAccessToken(refreshToken);
+    const res = await fetch(`${API_BASE}/artists/${id}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!res.ok) {
+      const txt = await res.text();
+      logger.warn({
+        msg: "spotify.artist.fetch_failed",
+        status: res.status,
+        txt,
+      });
+      return null;
+    }
+
+    const data = await res.json();
+    const artist = {
+      id: `spotify:${data.id}`,
+      provider: "spotify",
+      name: data.name || "",
+      bio: null, // Spotify doesn’t give bios
+      genres: data.genres || [],
+      followers: data.followers?.total || null,
+      artworkUrl: data.images?.[0]?.url || null,
+      cachedAt: new Date().toISOString(),
+    };
+
+    await rcacheSet(cacheKey, artist, 86400);
+    return artist;
+  } catch (err) {
+    logger.error({ msg: "spotify.artist.error", err: err.message });
+    return null;
+  }
 }

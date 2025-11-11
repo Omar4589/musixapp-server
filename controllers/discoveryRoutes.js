@@ -6,10 +6,13 @@ import { buildHome } from "../services/discovery/home.js";
 import {
   getAppleTrackDetails,
   getAppleAlbumDetails,
+  getAppleLibraryAlbumDetails,
+  getAppleArtistDetails,
 } from "../services/providers/appleDiscovery.js";
 import {
   getSpotifyTrackDetails,
   getSpotifyAlbumDetails,
+  getSpotifyArtistDetails,
 } from "../services/providers/spotifyDiscovery.js";
 
 const router = express.Router();
@@ -90,7 +93,9 @@ router.get("/discovery/track/:provider/:id", requireAuth, async (req, res) => {
 
 /* ---------------------- ALBUM DETAILS ---------------------- */
 router.get("/discovery/album/:provider/:id", requireAuth, async (req, res) => {
-  const { provider, id } = req.params;
+  const { provider } = req.params;
+  // Strip any prefixes like 'apple:' or 'spotify:'
+  const id = req.params.id.replace(/^(apple:|spotify:)/, "");
   const storefront = req.query.storefront || "us";
   const user = req.user;
 
@@ -99,20 +104,72 @@ router.get("/discovery/album/:provider/:id", requireAuth, async (req, res) => {
       const token = user?.providers?.apple?.musicUserToken;
       if (!token)
         return res.status(400).json({ message: "Apple user token missing" });
-      const album = await getAppleAlbumDetails(id, token, storefront);
+
+      // detect library vs catalog item
+      const isLibrary = id.startsWith("l.");
+
+      const album = isLibrary
+        ? await getAppleLibraryAlbumDetails(id, token)
+        : await getAppleAlbumDetails(id, token, storefront);
+
+      if (!album) {
+        console.warn(`[discovery.album] Apple album not found for ${id}`);
+        return res.status(404).json({ message: "Album not found" });
+      }
+
       return res.json(album);
     }
 
     if (provider === "spotify") {
       const refreshToken = user?.providers?.spotify?.refreshToken || null;
       const album = await getSpotifyAlbumDetails(id, refreshToken);
+
+      if (!album) {
+        console.warn(`[discovery.album] Spotify album not found for ${id}`);
+        return res.status(404).json({ message: "Album not found" });
+      }
+
       return res.json(album);
     }
 
+    // fallback for unsupported providers
     return res.status(400).json({ message: "Unsupported provider" });
   } catch (err) {
-    console.error("[discovery.album.error]", err.message);
+    console.error("[discovery.album.error]", provider, err.message);
     return res.status(500).json({ message: "Failed to load album details" });
+  }
+});
+
+/* ---------------------- ARIST DETAILS ---------------------- */
+router.get("/discovery/artist/:provider/:id", requireAuth, async (req, res) => {
+  const { provider } = req.params;
+  // strip prefixes like apple: or spotify:
+  const id = req.params.id.replace(/^(apple:|spotify:)/, "");
+  const storefront = req.query.storefront || "us";
+  const user = req.user;
+
+  try {
+    let artist = null;
+
+    if (provider === "apple") {
+      const token = user?.providers?.apple?.musicUserToken;
+      if (!token)
+        return res.status(400).json({ message: "Apple user token missing" });
+
+      artist = await getAppleArtistDetails(id, token, storefront);
+    } else if (provider === "spotify") {
+      const refreshToken = user?.providers?.spotify?.refreshToken || null;
+      artist = await getSpotifyArtistDetails(id, refreshToken);
+    } else {
+      return res.status(400).json({ message: "Unsupported provider" });
+    }
+
+    if (!artist) return res.status(404).json({ message: "Artist not found" });
+
+    return res.json(artist);
+  } catch (err) {
+    console.error("[discovery.artist.error]", err.message);
+    return res.status(500).json({ message: "Failed to load artist details" });
   }
 });
 

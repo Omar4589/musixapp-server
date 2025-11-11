@@ -224,4 +224,17 @@ router.post("/apple/token", requireAuth, async (req, res) => {
   return res.json({ ok: true });
 });
 
+router.get("/apple/dev-token", requireAuth, (_req, res) => {
+  try {
+    console.log("trying to get apple token");
+    const { token, expiresAt } = signAppleDeveloperToken(1800);
+    console.log(token);
+    res.json({ devToken: token, expiresAt });
+  } catch {
+    res.status(500).json({ message: "Failed to create Apple dev token" });
+  }
+});
+
+
+
 export default router;

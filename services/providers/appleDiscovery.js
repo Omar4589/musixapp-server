@@ -229,3 +229,98 @@ export async function getAppleAlbumDetails(id, userToken, storefront = "us") {
     tracks,
   };
 }
+
+export async function getAppleLibraryAlbumDetails(id, userToken) {
+  const url = `/v1/me/library/albums/${id}`;
+  const r = await appleFetch(url, { userToken });
+  const item = r?.data?.[0];
+  if (!item) return null;
+
+  return {
+    id: item.id,
+    name: item.attributes?.name || "",
+    artists: [item.attributes?.artistName].filter(Boolean),
+    genre: item.attributes?.genreNames?.[0] || "",
+    artworkUrl:
+      item.attributes?.artwork?.url
+        ?.replace("{w}", "600")
+        ?.replace("{h}", "600") || null,
+    tracks:
+      item.relationships?.tracks?.data?.map((t) => ({
+        id: t.id,
+        name: t.attributes?.name,
+        artists: [t.attributes?.artistName].filter(Boolean),
+        durationMs: t.attributes?.durationInMillis,
+      })) || [],
+  };
+}
+
+/* ---------------------- ARTIST DETAILS ---------------------- */
+export async function getAppleArtistDetails(
+  nameOrId,
+  userToken,
+  storefront = "us"
+) {
+  let artist = null;
+
+  try {
+    // If it's a clean ID (digits only), use it directly
+    if (/^\d+$/.test(nameOrId)) {
+      const res = await appleFetch(
+        `/v1/catalog/${storefront}/artists/${nameOrId}`,
+        {
+          userToken,
+          storefront,
+        }
+      );
+      artist = res?.data?.[0];
+    }
+
+    // If no result (likely a name), search by term
+    if (!artist) {
+      const searchRes = await appleFetch(`/v1/catalog/${storefront}/search`, {
+        userToken,
+        storefront,
+        params: { term: nameOrId, types: "artists", limit: 1 },
+      });
+
+      const firstArtist = searchRes?.results?.artists?.data?.[0];
+      if (firstArtist?.id) {
+        const detailRes = await appleFetch(
+          `/v1/catalog/${storefront}/artists/${firstArtist.id}`,
+          {
+            userToken,
+            storefront,
+          }
+        );
+        artist = detailRes?.data?.[0];
+      }
+    }
+    console.log("[apple.artist.raw]", JSON.stringify(artist, null, 2));
+
+    if (!artist) throw new Error("Artist not found");
+
+    const attrs = artist.attributes || {};
+    const artwork = attrs.artwork?.url
+      ?.replace("{w}", "600")
+      ?.replace("{h}", "600");
+
+    return {
+      id: artist.id,
+      name: attrs.name || nameOrId,
+      genres: attrs.genreNames || [],
+      artworkUrl: artwork || null,
+      bio:
+        attrs.editorialNotes?.standard || attrs.editorialNotes?.short || null,
+    };
+  } catch (err) {
+    console.warn("[apple.artist] fetch failed:", err.message);
+    return {
+      id: nameOrId,
+      name: nameOrId,
+      bio: null,
+      genres: [],
+      artworkUrl: null,
+    };
+  }
+}
