@@ -59,6 +59,18 @@ router.get("/oauth/spotify/callback", async (req, res) => {
     if (!stateData)
       return res.status(400).send("State already used or expired");
 
+    const user = await User.findById(userId).lean();
+    if (user.activeProvider && user.activeProvider !== "spotify") {
+      logger.warn({
+        msg: "spotify.oauth.already_linked_conflict",
+        userId,
+        active: user.activeProvider,
+      });
+      return res.redirect(
+        `${env.DEEP_LINK_SCHEME}://oauth/callback?provider=spotify&ok=0&error=already_linked`
+      );
+    }
+
     const tokens = await exchangeCodeForTokens(code);
     const me = await getCurrentUserProfile(tokens.accessToken);
 
@@ -70,6 +82,7 @@ router.get("/oauth/spotify/callback", async (req, res) => {
           "providers.spotify.refreshToken": tokens.refreshToken || null,
           "providers.spotify.scope": tokens.scope || [],
           "providers.spotify.linkedAt": new Date(),
+          activeProvider: "spotify",
         },
       },
       { new: true }
@@ -82,11 +95,7 @@ router.get("/oauth/spotify/callback", async (req, res) => {
   } catch (err) {
     logger.error({ msg: "spotify.oauth.callback.error", err: err.message });
     return res.redirect(
-      `${
-        env.DEEP_LINK_SCHEME
-      }://oauth/callback?provider=spotify&ok=0&error=${encodeURIComponent(
-        "oauth_failed"
-      )}`
+      `${env.DEEP_LINK_SCHEME}://oauth/callback?provider=spotify&ok=0&error=oauth_failed`
     );
   }
 });
@@ -122,6 +131,7 @@ router.get("/me/providers", requireAuth, async (req, res) => {
   }
 
   return res.json({
+    activeProvider: u.activeProvider || null,
     spotify: {
       linked: Boolean(s?.refreshToken),
       linkedAt: s?.linkedAt,
@@ -132,7 +142,7 @@ router.get("/me/providers", requireAuth, async (req, res) => {
       linked: Boolean(a?.musicUserToken),
       linkedAt: a?.linkedAt || null,
       subscriptionActive: a?.subscriptionActive ?? null,
-      needsAttention: false, // we don’t hard-block on this
+      needsAttention: false,
     },
     flags: {
       providerLinkOptional: !!env.PROVIDER_LINK_OPTIONAL,
@@ -141,53 +151,33 @@ router.get("/me/providers", requireAuth, async (req, res) => {
   });
 });
 
-// Unlink Spotify
-router.post("/providers/spotify/unlink", requireAuth, async (req, res) => {
-  await User.findByIdAndUpdate(req.user._id, {
-    $set: {
-      "providers.spotify.userId": null,
-      "providers.spotify.refreshToken": null,
-      "providers.spotify.scope": [],
-      "providers.spotify.linkedAt": null,
-    },
-  });
-  logger.info({ msg: "spotify.unlink", userId: String(req.user._id) });
-  return res.json({ ok: true });
-});
+// Unlink Spotify and Apple
+router.post("/providers/:provider/unlink", requireAuth, async (req, res) => {
+  const { provider } = req.params;
+  if (!["spotify", "apple"].includes(provider))
+    return res.status(400).json({ message: "Invalid provider" });
 
-// Link Apple token
-router.post("/apple/token", requireAuth, async (req, res) => {
-  const { musicUserToken } = req.body || {};
-  if (!musicUserToken) {
-    return res.status(400).json({ message: "musicUserToken required" });
+  const unset = {};
+  if (provider === "spotify") {
+    unset["providers.spotify.userId"] = null;
+    unset["providers.spotify.refreshToken"] = null;
+    unset["providers.spotify.scope"] = [];
+    unset["providers.spotify.linkedAt"] = null;
+  } else if (provider === "apple") {
+    unset["providers.apple.musicUserToken"] = null;
+    unset["providers.apple.subscriptionActive"] = null;
+    unset["providers.apple.linkedAt"] = null;
   }
 
-  await User.findByIdAndUpdate(req.user._id, {
-    $set: {
-      "providers.apple.musicUserToken": musicUserToken,
-      "providers.apple.linkedAt": new Date(),
-      // Optional: you can attempt verification here and set subscriptionActive
-    },
-  });
+  const user = await User.findById(req.user._id);
+  const nextUpdate = { $set: unset };
+  if (user.activeProvider === provider) nextUpdate.$set.activeProvider = null;
 
-  logger.info({ msg: "apple.link", userId: String(req.user._id) });
+  await User.findByIdAndUpdate(req.user._id, nextUpdate);
+  logger.info({ msg: `${provider}.unlink`, userId: String(req.user._id) });
+
   return res.json({ ok: true });
 });
-
-// Unlink Apple
-router.post("/providers/apple/unlink", requireAuth, async (req, res) => {
-  await User.findByIdAndUpdate(req.user._id, {
-    $set: {
-      "providers.apple.musicUserToken": null,
-      "providers.apple.subscriptionActive": null,
-      "providers.apple.linkedAt": null,
-    },
-  });
-  logger.info({ msg: "apple.unlink", userId: String(req.user._id) });
-  return res.json({ ok: true });
-});
-
-export default router;
 
 /* ---------- internal: state mirror keyed by state only ---------- */
 import { redis } from "../config/redis.js";
@@ -207,42 +197,31 @@ export async function setSpotifyState(userId, state, data, ttlSec = 600) {
 
 /* ---------- APPLE APPLE APPLE APPLE APPLE APPLE APPLE ---------- */
 // GET /api/apple/dev-token
-router.get("/apple/dev-token", requireAuth, (_req, res) => {
-  try {
-    console.log("trying to get apple token");
-    const { token, expiresAt } = signAppleDeveloperToken(1800);
-    console.log(token);
-    res.json({ devToken: token, expiresAt });
-  } catch {
-    res.status(500).json({ message: "Failed to create Apple dev token" });
-  }
-});
-
-// POST /api/apple/token
 router.post("/apple/token", requireAuth, async (req, res) => {
-  console.log("Posting apple token");
   const { musicUserToken } = req.body || {};
   if (!musicUserToken)
     return res.status(400).json({ message: "musicUserToken required" });
+
+  const user = await User.findById(req.user._id).lean();
+
+  if (user.activeProvider && user.activeProvider !== "apple") {
+    return res.status(409).json({
+      message: `Already linked with ${user.activeProvider}.`,
+      conflict: true,
+      currentProvider: user.activeProvider,
+    });
+  }
 
   await User.findByIdAndUpdate(req.user._id, {
     $set: {
       "providers.apple.musicUserToken": musicUserToken,
       "providers.apple.linkedAt": new Date(),
+      activeProvider: "apple",
     },
   });
+
+  logger.info({ msg: "apple.link", userId: String(req.user._id) });
   return res.json({ ok: true });
 });
 
-// POST /api/providers/apple/unlink
-router.post("/providers/apple/unlink", requireAuth, async (req, res) => {
-  console.log("Unlinking apple");
-  await User.findByIdAndUpdate(req.user._id, {
-    $set: {
-      "providers.apple.musicUserToken": null,
-      "providers.apple.subscriptionActive": null,
-      "providers.apple.linkedAt": null,
-    },
-  });
-  return res.json({ ok: true });
-});
+export default router;

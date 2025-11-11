@@ -62,6 +62,11 @@ const UserSchema = new mongoose.Schema(
     tokenVersion: { type: Number, default: 0 },
     preferences: { type: PreferencesSchema, default: () => ({}) },
     providers: { type: ProvidersSchema, default: () => ({}) },
+    activeProvider: {
+      type: String,
+      enum: ["spotify", "apple", null],
+      default: null,
+    },
   },
   { timestamps: true }
 );
