@@ -3,7 +3,6 @@ import { env } from "../../config/env.js";
 import { rcacheGet, rcacheSet } from "../../lib/redisCache.js";
 import { logger } from "../../config/logger.js";
 import { refreshAccessToken } from "../spotify.js";
-import { refreshAccessToken } from "../spotify.js";
 
 const API_BASE = "https://api.spotify.com/v1";
 
