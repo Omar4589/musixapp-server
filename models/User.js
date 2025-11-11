@@ -5,7 +5,9 @@ const rounds = parseInt(process.env.BCRYPT_ROUNDS || "12", 10);
 
 const PreferencesSchema = new mongoose.Schema(
   {
-    preferredLanguages: { type: [String], default: ["en", "es", "ja"] },
+    // start new users with nothing selected
+    preferredLanguages: { type: [String], default: [] },
+    genres: { type: [String], default: [] },
   },
   { _id: false }
 );

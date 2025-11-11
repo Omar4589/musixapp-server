@@ -56,7 +56,12 @@ const sanitizeUser = (u) => ({
   fullName: u.fullName || `${u.firstName || ""} ${u.lastName || ""}`.trim(),
   roles: Array.isArray(u.roles) ? u.roles : ["user"],
   isActive: u.isActive,
-  preferences: u.preferences || { preferredLanguages: ["en", "es", "ja"] },
+  preferences: {
+    preferredLanguages: Array.isArray(u?.preferences?.preferredLanguages)
+      ? u.preferences.preferredLanguages
+      : [],
+    genres: Array.isArray(u?.preferences?.genres) ? u.preferences.genres : [],
+  },
   createdAt: u.createdAt,
   updatedAt: u.updatedAt,
 });

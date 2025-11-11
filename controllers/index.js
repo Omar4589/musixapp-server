@@ -3,6 +3,8 @@ import express from "express";
 import authRoutes from "./authRoutes.js";
 import adminRoutes from "./adminRoutes.js";
 import providerRoutes from "./providerRoutes.js";
+import meRoutes from "./meRoutes.js";
+import discoveryRoutes from "./discoveryRoutes.js";
 
 const router = express.Router();
 
@@ -10,5 +12,7 @@ const router = express.Router();
 router.use(authRoutes);
 router.use(adminRoutes);
 router.use(providerRoutes);
+router.use(meRoutes);
+router.use(discoveryRoutes);
 
 export default router;
