@@ -74,6 +74,17 @@ router.get("/oauth/spotify/callback", async (req, res) => {
     const tokens = await exchangeCodeForTokens(code);
     const me = await getCurrentUserProfile(tokens.accessToken);
 
+    if (me?.product !== "premium") {
+      logger.warn({
+        msg: "spotify.oauth.nonpremium",
+        userId,
+        plan: me?.product,
+      });
+      return res.redirect(
+        `${env.DEEP_LINK_SCHEME}://oauth/callback?provider=spotify&ok=0&error=not_premium`
+      );
+    }
+
     await User.findByIdAndUpdate(
       userId,
       {
@@ -82,6 +93,7 @@ router.get("/oauth/spotify/callback", async (req, res) => {
           "providers.spotify.refreshToken": tokens.refreshToken || null,
           "providers.spotify.scope": tokens.scope || [],
           "providers.spotify.linkedAt": new Date(),
+          "providers.spotify.plan": me?.product || null,
           activeProvider: "spotify",
         },
       },
@@ -105,17 +117,34 @@ async function getSpotifyNeedsAttention(user) {
   try {
     const rt = user?.providers?.spotify?.refreshToken;
     if (!rt) return false;
+
+    // 🔁 Refresh access token
     const refreshed = await refreshAccessToken(rt);
-    // If refresh returned a new refreshToken, we might want to persist it
+    const me = await getCurrentUserProfile(refreshed.accessToken);
+
+    // 🧠 Update stored plan
+    if (me?.product) {
+      await User.findByIdAndUpdate(user._id, {
+        $set: { "providers.spotify.plan": me.product },
+      });
+    }
+
+    // ⚠️ If plan isn’t premium → needs attention
+    if (me?.product !== "premium") {
+      return true;
+    }
+
+    // 🔐 Keep refresh token up-to-date if Spotify rotated it
     if (refreshed?.refreshToken) {
       await User.findByIdAndUpdate(user._id, {
         $set: { "providers.spotify.refreshToken": refreshed.refreshToken },
       });
     }
-    return false; // refresh ok
+
+    return false; // all good
   } catch (e) {
-    // invalid_grant or similar → needs attention
-    return true;
+    console.error("Spotify plan recheck failed", e);
+    return true; // fallback: assume it needs attention
   }
 }
 
@@ -136,6 +165,7 @@ router.get("/me/providers", requireAuth, async (req, res) => {
       linked: Boolean(s?.refreshToken),
       linkedAt: s?.linkedAt,
       scopes: s?.scope || [],
+      plan: s.plan || null,
       needsAttention: spotifyNeeds,
     },
     apple: {
@@ -234,7 +264,5 @@ router.get("/apple/dev-token", requireAuth, (_req, res) => {
     res.status(500).json({ message: "Failed to create Apple dev token" });
   }
 });
-
-
 
 export default router;

@@ -19,6 +19,11 @@ const ProvidersSchema = new mongoose.Schema(
       refreshToken: { type: String, default: null },
       scope: { type: [String], default: [] },
       linkedAt: { type: Date, default: null },
+      plan: {
+        type: String,
+        enum: ["free", "open", "premium", null],
+        default: null,
+      },
     },
     apple: {
       musicUserToken: { type: String, default: null },
